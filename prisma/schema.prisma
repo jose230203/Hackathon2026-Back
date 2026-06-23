@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+
+}
+
+// ==========================================
+// MÓDULO A: SEGURIDAD, USUARIOS Y VINCULACIÓN
+// ==========================================
+
+enum UserRole {
+  PATIENT
+  CAREGIVER
+  ADMIN       // 🚨 CORREGIDO: Añadido para el Personal de Salud / MINSA
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model Profile {
+  id           String    @id @db.Uuid // Se amarra al ID de Supabase Auth
+  email        String    @unique
+  fullName     String
+  phoneNumber  String?
+  role         UserRole  @default(PATIENT)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relaciones
+  asPatient       CaregiverPatient[]       @relation("PatientRelation")
+  asCaregiver     CaregiverPatient[]       @relation("CaregiverRelation")
+  invitationCodes InvitationCode[]
+  pressureRecords BloodPressureRecord[]
+  glucoseRecords  GlucoseRecord[]
+  symptoms        PatientSymptom[]
+  chatSessions    ChatSession[]
+  prescriptions   MedicationPrescription[]
+  appointments    MedicalAppointment[]
+  
+  // 🚨 NUEVO: Relación para saber qué notas públicas creó este administrador
+  createdNotices  PublicHealthNotice[]    
+
+  @@map("profiles")
+}
+
+model CaregiverPatient {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  caregiverId String           @db.Uuid
+  patientId   String           @db.Uuid
+  status      InvitationStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+
+  // Llaves foráneas
+  caregiver   Profile          @relation("CaregiverRelation", fields: [caregiverId], references: [id], onDelete: Cascade)
+  patient     Profile          @relation("PatientRelation", fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([caregiverId, patientId])
+  @@map("caregiver_patients")
+}
+
+model InvitationCode {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId String   @db.Uuid
+  code      String   @unique
+  isUsed    Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  patient   Profile  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("invitation_codes")
+}
+
+// ==========================================
+// MÓDULO B: MONITOREO Y SEMÁFORO DE RIESGO
+// ==========================================
+
+enum RiskLevel {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum GlucoseState {
+  AYUNAS
+  POST_PRANDIAL
+}
+
+model BloodPressureRecord {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId  String    @db.Uuid
+  systolic   Int       
+  diastolic  Int       
+  pulse      Int       
+  riskLevel  RiskLevel 
+  capturedAt DateTime  // Crucial para Modo Offline
+  createdAt  DateTime  @default(now())
+
+  patient    Profile   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("blood_pressure_records")
+}
+
+model GlucoseRecord {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId  String       @db.Uuid
+  value      Int          
+  state      GlucoseState @default(AYUNAS)
+  riskLevel  RiskLevel
+  capturedAt DateTime     // Crucial para Modo Offline
+  createdAt  DateTime     @default(now())
+
+  patient    Profile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("glucose_records")
+}
+
+model PatientSymptom {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId   String   @db.Uuid
+  description String   @db.Text
+  capturedAt  DateTime // 🚨 CORREGIDO: Añadido para el Modo Offline de los síntomas
+  createdAt   DateTime @default(now())
+
+  patient     Profile  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("patient_symptoms")
+}
+
+// ==========================================
+// MÓDULO C: ASISTENTE VIRTUAL CON IA
+// ==========================================
+
+enum ChatSender {
+  USER
+  ASSISTANT
+}
+
+model ChatSession {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId String        @db.Uuid
+  title     String        
+  createdAt DateTime      @default(now())
+
+  patient   Profile       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId String      @db.Uuid
+  sender    ChatSender
+  content   String      @db.Text
+  language  String      @default("es") 
+  createdAt DateTime    @default(now())
+
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+// ==========================================
+// MÓDULO D: MEDICAMENTOS Y CITAS
+// ==========================================
+
+enum LogStatus {
+  TOMADO
+  OLVIDADO
+  PENDIENTE
+}
+
+model MedicationPrescription {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId      String          @db.Uuid
+  medicationName String
+  dosage         String          
+  frequency      String          
+  startDate      DateTime
+  endDate        DateTime
+  createdAt      DateTime        @default(now())
+
+  patient        Profile         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  logs           MedicationLog[]
+
+  @@map("medication_prescriptions")
+}
+
+model MedicationLog {
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prescriptionId String                 @db.Uuid
+  status         LogStatus              @default(PENDIENTE)
+  scheduledTime  DateTime
+  takenAt        DateTime?
+  createdAt      DateTime               @default(now())
+
+  prescription   MedicationPrescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@map("medication_logs")
+}
+
+model MedicalAppointment {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId        String        @db.Uuid
+  doctorName       String
+  specialty        String
+  appointmentDate  DateTime
+  createdAt        DateTime      @default(now())
+
+  healthCenterId   String        @db.Uuid
+  healthCenter     HealthCenter  @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
+  
+  patient          Profile       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("medical_appointments")
+}
+
+// ==========================================
+// MÓDULO E: GLOBALES (ALERTAS COMUNITARIAS Y CENTROS)
+// ==========================================
+
+enum NoticeType {
+  EPIDEMIC_ALERT
+  VACCINATION_CAMPAIGN
+  COMMUNITY_EVENT
+}
+
+model PublicHealthNotice {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title     String
+  content   String     @db.Text
+  type      NoticeType @default(COMMUNITY_EVENT)
+  region    String     
+  createdAt DateTime   @default(now())
+
+  // 🚨 CORREGIDO: Relación obligatoria con el administrador que emite el comunicado
+  adminId   String     @db.Uuid
+  admin     Profile    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("public_health_notices")
+}
+
+model HealthCenter {
+  id           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  type         String   
+  latitude     Float
+  longitude    Float
+  phone        String?
+  municipality String 
+  createdAt    DateTime             @default(now())
+
+  appointments MedicalAppointment[]
+  @@map("health_centers")
+}
